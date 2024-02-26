@@ -6,9 +6,13 @@ import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Bundle
+import android.os.Parcelable
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.animation.doOnCancel
 import androidx.core.animation.doOnEnd
 import androidx.lifecycle.MutableLiveData
 import java.math.RoundingMode
@@ -36,6 +40,14 @@ class CustomWheelView @JvmOverloads constructor(
     private var randomSweepAngle = 0f
     private var scale = 0.5f
 
+    private enum class AnimationStatus {
+        NONE, BACK_SPIN, SPIN
+    }
+
+    private var currentAnimationStatus = AnimationStatus.NONE
+    private var currentAnimationTime : Long? = 0
+    private var spinTo : Float? = 0f
+
     val currentWheelValue: MutableLiveData<WheelValue> by lazy {
         MutableLiveData<WheelValue>()
     }
@@ -51,6 +63,22 @@ class CustomWheelView @JvmOverloads constructor(
     fun rescale(scale: Float) {
         this.scale = 1 - scale
         invalidate()
+    }
+
+    override fun onAttachedToWindow() {
+        when (currentAnimationStatus) {
+            AnimationStatus.BACK_SPIN -> {
+                Log.d("TAG", "BACK_SPIN INIT")
+                refreshAndSpinWheel(currentAnimationTime ?: 0)
+            }
+            AnimationStatus.SPIN -> {
+                Log.d("TAG", "SPIN INIT")
+                spinWheel(currentAnimationTime ?: 0, spinTo ?: 0f)
+            }
+            else -> { Log.d("TAG", "NONE INIT")  }
+        }
+
+        super.onAttachedToWindow()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -89,38 +117,55 @@ class CustomWheelView @JvmOverloads constructor(
         )
     }
 
-    private fun spinWheel() {
-        if (randomSweepAngle != 0f) backWheel()
+    private fun refreshAndSpinWheel(currentAnimationTime: Long = 0) {
+        if (randomSweepAngle != 0f) {
+            currentAnimationStatus = AnimationStatus.BACK_SPIN
 
-        val animator = ValueAnimator.ofFloat(0f, (1081..2160).random().toFloat())
-        animator.duration = 5000
-        animator.startDelay = 1000
+            val animator = ValueAnimator.ofFloat(randomSweepAngle, 2160f)
+            animator.duration = 2000 - currentAnimationTime
+            animator.doOnEnd {
+                randomSweepAngle = 0f
+                spinWheel()
+            }
+            animator.doOnCancel {
+                currentAnimationStatus = AnimationStatus.NONE
+            }
+            animator.start()
+
+            animator.addUpdateListener {
+                randomSweepAngle = animator.animatedValue as Float
+                this.currentAnimationTime = animator.currentPlayTime
+                invalidate()
+            }
+        } else spinWheel()
+    }
+
+    private fun spinWheel(currentAnimationTime: Long = 0, spinTo: Float = 0f) {
+        currentAnimationStatus = AnimationStatus.SPIN
+
+        val newSpinTo = if (spinTo != 0f) spinTo else (1081..2160).random().toFloat()
+        this.spinTo = newSpinTo
+
+        val animator = ValueAnimator.ofFloat(if (spinTo != 0f) randomSweepAngle else 0f, newSpinTo)
+        animator.duration = 5000 - currentAnimationTime
+        animator.startDelay = if (spinTo != 0f) 0 else 1000
         animator.doOnEnd {
             this.isClickable = true
             currentWheelValue.value = getWheelValue()
+            currentAnimationStatus = AnimationStatus.NONE
         }
+        animator.doOnCancel { currentAnimationStatus = AnimationStatus.NONE }
         animator.start()
 
         animator.addUpdateListener {
             randomSweepAngle = animator.animatedValue as Float
-            invalidate()
-        }
-    }
-
-    private fun backWheel() {
-        val animator = ValueAnimator.ofFloat(randomSweepAngle, 2160f)
-        animator.duration = 500
-        animator.doOnEnd { randomSweepAngle = 0f }
-        animator.start()
-
-        animator.addUpdateListener {
-            randomSweepAngle = animator.animatedValue as Float
+            this.currentAnimationTime = animator.currentPlayTime
             invalidate()
         }
     }
 
     override fun performClick(): Boolean {
-        spinWheel()
+        refreshAndSpinWheel()
         return super.performClick()
     }
 
@@ -134,5 +179,29 @@ class CustomWheelView @JvmOverloads constructor(
             }
         }
         return true
+    }
+
+    override fun onSaveInstanceState(): Parcelable {
+        val bundle = Bundle()
+        bundle.putString("animationStatus", currentAnimationStatus.name)
+        bundle.putFloat("randomSweepAngle", randomSweepAngle)
+        bundle.putLong("currentAnimationTime", currentAnimationTime ?: 0)
+        bundle.putFloat("spinTo", spinTo ?: 0f)
+        bundle.putParcelable("instanceState", super.onSaveInstanceState())
+        return bundle
+    }
+
+
+    override fun onRestoreInstanceState(state: Parcelable?) {
+        val bundle = state as Bundle
+        currentAnimationStatus = when (state.getString("animationStatus")) {
+            AnimationStatus.BACK_SPIN.toString() -> AnimationStatus.BACK_SPIN
+            AnimationStatus.SPIN.toString() -> AnimationStatus.SPIN
+            else -> AnimationStatus.NONE
+        }
+        randomSweepAngle = state.getFloat("randomSweepAngle")
+        currentAnimationTime = state.getLong("currentAnimationTime")
+        spinTo = state.getFloat("spinTo")
+        super.onRestoreInstanceState(bundle.getParcelable("instanceState"))
     }
 }
